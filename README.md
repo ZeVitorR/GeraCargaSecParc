@@ -5,6 +5,7 @@
 * **Namespace:** `FIN`
 * **Autor:** José Vitor Rodrigues
 * **Data:** 19/08/2025
+* **linguagem:** tlpp
 * **Versão:** 1.0
 * **Módulo:** Financeiro (SIGAFIN) / Gestão Imobiliária
 * **Descrição:** Esta rotina desenvolvida em ADVPL (Protheus) é um processo robusto de extração de dados financeiros e imobiliários, estruturado especificamente para atender às exigências de Securitizadoras e Parceiros Financeiros. Ela atua como uma ponte entre o ERP Protheus e o mercado de capitais, consolidando o lastro necessário para operações de crédito.
