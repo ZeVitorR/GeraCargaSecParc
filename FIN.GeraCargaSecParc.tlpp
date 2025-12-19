@@ -1,0 +1,1457 @@
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FWCOMMAND.CH"
+#INCLUDE "TOPCONN.CH" 
+
+namespace FIN
+
+/*/{Protheus.doc} GeraCargaSecParc
+    Rotina para gerar o relatório de Securitizadora/Parceiro THCM
+    @type user function
+    @author José Vitor Rodrigues
+    @since 19/08/2025
+    @version 1.0
+/*/
+User Function GeraCargaSecParc()
+    Private aSelFil		:= {}     as array
+    Private cTempAlias  := "TMP"  as character
+    Private nTipo                 as numeric// 1=Securitizadora, 2=Parceiro
+    Private cNome                 as character// Nome da Securitizadora ou Parceiro
+    Private cFiliaisSel           as character // Filiais selecionadas
+    Private cColuna               as character // Coluna de Securitizadora ou Parceiro
+	
+	PerguntasRotina()
+    SelecionaFilial()
+
+Return
+
+/*/{Protheus.doc} SelecionaFilial
+    Função para selecionar as filiais a serem consultadas
+    @type  Static Function
+    @author José Vitor Rodrigues
+    @since 19/08/2025
+    @version 1.0
+/*/
+Static Function SelecionaFilial()
+    Local aArea         := GetArea()
+    Local aCampos := {}
+    Local oTTable := Nil
+    Local aColunas := {}
+    local nX
+    //Janela e componentes
+    Private oDlgMark
+    Private oPanGrid
+    Private oMaBrowse
+    Private cAlTmp := GetNextAlias()
+    //Tamanho da janela
+    Private aTamanho := MsAdvSize()
+    Private nJanLarg := aTamanho[5]
+    Private nJanAltu := aTamanho[6]
+
+    //Adiciona as colunas que serão criadas na temporária
+    aAdd(aCampos, { 'CODIGO', 'C', 2, 0,''}) //Código
+    aAdd(aCampos, { 'FILIAL', 'C', 6, 0,''}) //Filial
+    aAdd(aCampos, { 'NOME', 'C', 50, 0,''}) //Nome
+    aAdd(aCampos, { 'CNPJ', 'C', 14, 0,''}) //CNPJ
+    aAdd(aCampos, { 'OK', 'C', 2, 0,''}) //Flag para marcação
+
+    //Cria a tabela temporária
+    oTTable:= FWTemporaryTable():New(cAlTmp)
+    oTTable:SetFields( aCampos )
+    oTTable:Create()  
+
+    Popula()
+    //Percorrendo todos os campos da estrutura e adicionando na aColuna
+    For nX := 1 To Len(aCampos)-1    
+        AAdd(aColunas,FWBrwColumn():New())
+        aColunas[Len(aColunas)]:SetData( &("{||"+aCampos[nX][1]+"}") )
+        aColunas[Len(aColunas)]:SetTitle(aCampos[nX][1])
+        aColunas[Len(aColunas)]:SetSize(aCampos[nX][3])
+        aColunas[Len(aColunas)]:SetDecimal(aCampos[nX][4])              
+    Next nX 
+
+    DEFINE MSDIALOG oDlgMark TITLE 'SELECIONE UMA FILIAL' FROM 000, 000  TO 600, 800 COLORS 0, 16777215 PIXEL
+        //Dados
+        oPanGrid := tPanel():New(001, 001, '', oDlgMark, , , , RGB(000,000,000), RGB(254,254,254), (800/2)-1,     (600/2 - 1))
+        oMaBrowse:= FWMarkBrowse():New()
+        oMaBrowse:SetDescription("SELEÇÃO DE FILIAL") //Titulo da Janela
+        oMaBrowse:SetAlias(cAlTmp)
+        oMaBrowse:AddButton("Confirma",{|| FWMsgRun(, {|oSay| GeraExcel(oSay) }, "Processando", "Processando dados")} ,,3,,.F.)
+        oMaBrowse:AddButton("Selecionar Tudo", {||oMaBrowse:AllMark()},,4,,.F.)
+        oMaBrowse:SetTemporary(.T.) //Indica que o Browse utiliza tabela temporária
+        oMaBrowse:SetFieldMark('OK')
+        oMaBrowse:SetOwner(oPanGrid)
+        oMaBrowse:SetColumns(aColunas)
+        oMaBrowse:Activate()
+
+    ACTIVATE MsDialog oDlgMark CENTERED
+    
+    RestArea(aArea)  
+    
+Return 
+
+/*/{Protheus.doc} GeraExcel
+    Função para chamar a geração do relatório de Securitizadora/Parceiro
+    Esta função é chamada após a seleção das filiais e coleta dos parâmetros necessários.
+    @type Static Function
+    @author José Vitor Rodrigues
+    @since 19/08/2025
+    @version 1.0
+    /*/
+Static Function GeraExcel(oSay)
+    //Define as filiais selecionadas
+    defineFiliais()
+
+    //Chama a função que gera o relatório de Securitizadora/Parceiro
+    FWMsgRun(, {|oSay| GeraRelatorio(oSay)}, "Processando", "Gerando relatório")
+
+Return
+
+/*/{Protheus.doc} GeraRelatorio
+    Função para gerar o relatório de Securitizadora/Parceiro em formato Excel XLSX.
+    Esta função é chamada após a seleção das filiais e coleta dos parâmetros necessários.
+    @type Static Function
+    @author José Vitor Rodrigues
+    @since 19/08/2025
+    @version 1.0
+/*/
+Static Function GeraRelatorio(oSay)
+   Private oPrintXlsx
+   Private dData       := Date()
+   Private cHora       := Time()
+   Private cCodUsr     := RetCodUsr()
+   Private cNomeArq    := If(nTipo == 1, "Securitizadora", "Parceiro")
+   Private cArquivo    := 'C:\spool\'+cNomeArq + dToS(dData) + '_' + StrTran(cHora, ':', '-')
+   Private oExcel
+   Private cFonte      := FwPrinterFont():Arial()
+   Private nTamFonte   := 12
+   Private lItalico    := .F.
+   Private lNegrito    := .T.
+   Private lSublinhado := .F.
+   Private nCpoAtual   := 0
+   Private oCellHoriz  := FwXlsxCellAlignment():Horizontal()
+   Private oCellVerti  := FwXlsxCellAlignment():Vertical()
+   Private cHorAlinha  := ""
+   Private cVerAlinha  := ""
+   Private cCustomFormat := "#,##0.00"
+   Private cHorAlinhaR := oCellHoriz:Right()
+   Private lQuebrLin   := .F.
+   Private nRotation   := 0
+   Private cCustForma  := ""
+   Private cCampoAtu   := ""
+   Private cTipo       := ""
+   Private nTamanho    := 0
+   Private cTitulo     := ""
+   Private cMascara    := ""
+   Private cCorFundo   := ""
+
+    oPrintXlsx := FwPrinterXlsx():New()
+    If oPrintXlsx:Activate(cArquivo)
+        //definindo as sheets
+        defineEmpresas()
+        defineEmpreendimentos()
+        defineBlocos()
+        defineUnidades()
+        defineClientes()
+        defineContratos()
+        defineParticipacoes()
+        defineParcelas()
+        defineOcorrencias()
+
+        oPrintXlsx:ToXlsx()
+        oPrintXlsx:EraseBaseFile()
+        cArquivo := ChgFileExt(cArquivo, '.xlsx')
+        oPrintXlsx:DeActivate()
+        MsgInfo("Planilha salva em: "+cArquivo,"AVISO")
+
+        oDlgMark:end()
+    EndIf
+
+Return
+
+/*/{Protheus.doc} defineEmpresas
+    Função para definir os sheet de empresas a serem utilizadas na rotina de geração de Securitizadora/Parceiro
+    @type Static Function
+    @author José Vitor Rodrigues
+    @since 19/08/2025
+    @version 1.0
+/*/
+Static Function defineEmpresas()
+    Local nLinha  := 1              as numeric
+    Local nAtual  := 1              as numeric
+    Local nContador := 1            as numeric
+    local aColunas := {}            as array
+
+    oPrintXlsx:AddSheet("Empresas")
+
+    aadd(aColunas,{"COD_EMPRESA"  		,006})
+    aadd(aColunas,{"RAZAO_SOCIAL" 		,060})
+    aadd(aColunas,{"CNPJ"         		,015})
+    aadd(aColunas,{"TIPO"         		,001})
+    aadd(aColunas,{"ENDERECO"     		,060})
+    aadd(aColunas,{"COMPLEMENTO"   		,010})
+    aadd(aColunas,{"BAIRRO"       		,010})
+    aadd(aColunas,{"CIDADE"       		,010})
+    aadd(aColunas,{"UF"           		,010})
+    aadd(aColunas,{"CEP"                ,010}) 
+    aadd(aColunas,{"INSCRICAO_MUNICIPAL",010}) 
+
+    nTamFonte := 8
+    lNegrito  := .F.    
+    cHorAlinha  := oCellHoriz:Center()
+    cVerAlinha  := oCellVerti:Center()
+    oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "FFFFFF", "4D93D9", cCustForma)
+    oPrintXlsx:SetFont(cFonte, nTamFonte, lItalico, lNegrito, lSublinhado)
+
+    For nAtual := 1 To Len(aColunas)
+        oPrintXlsx:SetColumnsWidth(nAtual, nAtual, aColunas[nAtual][2])
+        oPrintXlsx:SetValue(nLinha, nAtual, aColunas[nAtual][1])
+    Next     
+
+    nLinha++    
+    
+    DbSelectArea("SM0")
+
+    for nContador := 1 to Len(aSelFil)
+        If nLinha % 2 != 0
+            cCorFundo := "A6C9EC"
+        Else
+            cCorFundo := "DAE9F8"
+        EndIf
+        cHorAlinha := oCellHoriz:Left()
+        oPrintXlsx:ResetCellsFormat()
+        oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+                     
+        oPrintXlsx:SetValue(nLinha, 1, aSelFil[nContador][1]) // Filial
+        oPrintXlsx:SetValue(nLinha, 2, aSelFil[nContador][2]) // Nome
+        oPrintXlsx:SetValue(nLinha, 3, aSelFil[nContador][3]) // CNPJ
+        oPrintXlsx:SetValue(nLinha, 4, "4")                   // Tipo
+        oPrintXlsx:SetValue(nLinha, 5, "")                    // endereço
+        oPrintXlsx:SetValue(nLinha, 6, "")                    // Complemento
+        oPrintXlsx:SetValue(nLinha, 7, "")                    // Bairro
+        oPrintXlsx:SetValue(nLinha, 8, "")                    // Cidade
+        oPrintXlsx:SetValue(nLinha, 9, "")                    // UF
+        oPrintXlsx:SetValue(nLinha, 10, "")                   // CEP
+        oPrintXlsx:SetValue(nLinha, 11, "")                   // Inscrição Municipal
+        nLinha++
+    next     
+
+Return
+
+/*/{Protheus.doc} defineEmpreendimentos
+    Esta função é responsável por definir o sheet de empreendimentos a serem utilizados na rotina de geração de Securitizadora/Parceiro.
+    @type Static Function
+    @author José Vitor Rodrigues
+    @since 19/08/2025
+    @version 1.0
+/*/
+Static Function defineEmpreendimentos()
+    Local nLinha  := 1              as numeric
+    Local nAtual  := 1              as numeric
+    Local nContador := 1            as numeric
+    Local cAliasEmp := GetNextAlias() as character
+    local aColunas := {}            as array
+
+    oPrintXlsx:AddSheet("Empreendimentos")
+
+    aadd(aColunas,{"COD_PROJETO"   ,005})
+    aadd(aColunas,{"COD_EMPRESA"   ,006})
+    aadd(aColunas,{"PROJETO"       ,060})
+    aadd(aColunas,{"NOME_REDUZIDO" ,060})
+    aadd(aColunas,{"CODIGO_SPE"    ,010})
+    aadd(aColunas,{"DT_LANCAMENTO" ,010})
+    aadd(aColunas,{"ENDERECO"      ,010})
+    aadd(aColunas,{"BAIRRO"        ,010})
+    aadd(aColunas,{"ESTADO"        ,010})
+    aadd(aColunas,{"CIDADE"        ,010}) 
+    aadd(aColunas,{"CEP"           ,010}) 
+
+    nTamFonte := 8
+    lNegrito  := .F.    
+    cHorAlinha  := oCellHoriz:Center()
+    cVerAlinha  := oCellVerti:Center()
+    oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "FFFFFF", "4D93D9", cCustForma)
+    oPrintXlsx:SetFont(cFonte, nTamFonte, lItalico, lNegrito, lSublinhado)
+
+    For nAtual := 1 To Len(aColunas)
+        oPrintXlsx:SetColumnsWidth(nAtual, nAtual, aColunas[nAtual][2])
+        oPrintXlsx:SetValue(nLinha, nAtual, aColunas[nAtual][1])
+    Next
+
+    nLinha++
+    
+    
+    
+    BEGINSQL ALIAS cAliasEmp
+        SELECT 
+            B1_DATREF,    
+            B1_FILIAL,
+            B1_COD,      
+            B1_NOMLOT,     
+            B1_DESC                   	
+        FROM 
+            %table:SB1% SB1
+        WHERE
+            1=1 
+            AND B1_FILIAL IN (%exp:cFiliaisSel%)
+            AND B1_GERALOT <> ''
+            AND SB1.%notdel%
+        ORDER BY B1_FILIAL, B1_COD    
+    ENDSQL
+
+    While (cAliasEmp)->(!Eof()) 
+        If nContador-1 % 2 != 0
+            cCorFundo := "A6C9EC"
+        Else
+            cCorFundo := "DAE9F8"
+        EndIf
+        cHorAlinha := oCellHoriz:Left()
+        oPrintXlsx:ResetCellsFormat()
+        oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+        
+        cData := IF(!Empty((cAliasEmp)->B1_DATREF),Substr((cAliasEmp)->B1_DATREF, 7,2)+'/'+Substr((cAliasEmp)->B1_DATREF, 5,2)+'/'+left((cAliasEmp)->B1_DATREF, 4),'')
+        cProj := SUBSTR((cAliasEmp)->B1_FILIAL,1,3)+SUBSTR((cAliasEmp)->B1_FILIAL,5,2)
+
+        oPrintXlsx:SetValue(nLinha, 1, cProj) // Código
+        oPrintXlsx:SetValue(nLinha, 2, (cAliasEmp)->B1_FILIAL) // Filial
+        oPrintXlsx:SetValue(nLinha, 3, (cAliasEmp)->B1_NOMLOT) // Nome
+        oPrintXlsx:SetValue(nLinha, 4, (cAliasEmp)->B1_DESC) // Tipo
+        oPrintXlsx:SetValue(nLinha, 5, "") // CODIGO_SPE
+        oPrintXlsx:SetValue(nLinha, 6, cData) // Data
+        oPrintXlsx:SetValue(nLinha, 7, "") // Endereço
+        oPrintXlsx:SetValue(nLinha, 8, "") // Bairro
+        oPrintXlsx:SetValue(nLinha, 9, "") // Cidade
+        oPrintXlsx:SetValue(nLinha, 10, "") // UF
+        oPrintXlsx:SetValue(nLinha, 11, "") // CEP
+        nLinha++
+
+        (cAliasEmp)->(dbSkip())
+    EndDo
+    
+    (cAliasEmp)->(DbCloseArea())
+Return
+
+/*/{Protheus.doc} defineBlocos
+    Função para definir o sheet dos blocos a serem utilizados na rotina de geração de Securitizadora/Parceiro
+    @type Static Function
+    @author José Vitor Rodrigues
+    @since 19/08/2025
+    @version 1.0
+/*/
+Static Function defineBlocos()
+    Local nLinha  := 1              as numeric
+    Local nContador := 1            as numeric
+    Local nAtual := 1              as numeric
+    local aColunas := {}            as array
+    local cAlias := GetNextAlias() as character
+
+    oPrintXlsx:AddSheet("Blocos")
+
+    aadd(aColunas,{"COD_BLOCO"   		 ,020})
+    aadd(aColunas,{"COD_PROJETO" 		 ,005})
+    aadd(aColunas,{"NUM_BLOCO"   		 ,005})
+    aadd(aColunas,{"BLOCO"       		 ,060})
+    aadd(aColunas,{"DT_HABITESE" 		 ,010})
+    aadd(aColunas,{"DT_PREVISAO_ENTREGA" ,010})
+
+    nTamFonte := 8
+    lNegrito  := .F.    
+    cHorAlinha  := oCellHoriz:Center()
+    cVerAlinha  := oCellVerti:Center()
+    oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "FFFFFF", "4D93D9", cCustForma)
+    oPrintXlsx:SetFont(cFonte, nTamFonte, lItalico, lNegrito, lSublinhado)
+
+    For nAtual := 1 To Len(aColunas)
+        oPrintXlsx:SetColumnsWidth(nAtual, nAtual, aColunas[nAtual][2])
+        oPrintXlsx:SetValue(nLinha, nAtual, aColunas[nAtual][1])
+    Next     
+
+    nLinha++
+    
+    
+    //cColuna = SE1.E1_ZZSECUR || SE1.E1_ZZPARCE
+    BEGINSQL Alias cAlias
+        SELECT DISTINCT
+            E1_FILIAL, 
+            E1_PRODUTO, 
+            %exp:cColuna% AS DADO
+        FROM 
+            %table:SE1% SE1
+        WHERE
+            1=1 
+            AND E1_FILIAL IN (%exp:cFiliaisSel%)
+            AND E1_PRODUTO <> ''
+            AND %exp:cColuna% = %exp:cNome%
+            AND SE1.%notdel%
+        ORDER BY E1_FILIAL, E1_PRODUTO
+    ENDSQL
+
+    DbSelectArea("SB1")
+    DbSetOrder(1)
+
+    cNumBl := ""
+    nContador := 0
+    While (cAlias)->(!Eof())
+        If nLinha % 2 != 0
+            cCorFundo := "A6C9EC"
+        Else
+            cCorFundo := "DAE9F8"
+        EndIf
+
+        cHorAlinha := oCellHoriz:Left()
+        oPrintXlsx:ResetCellsFormat()
+        oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+
+        SB1->(MsSeek((cAlias)->E1_FILIAL+(cAlias)->E1_PRODUTO))
+
+		cBloco:= SUBSTR(SB1->B1_FILIAL,1,3)+SB1->B1_QUADRA 
+		cProj := SUBSTR((cAlias)->E1_FILIAL,1,3)+SUBSTR((cAlias)->E1_FILIAL,5,2)
+
+        IF cNumBl <> SB1->B1_QUADRA
+            cNumBl:= SB1->B1_QUADRA
+            oPrintXlsx:SetValue(nLinha, 1, cBloco)
+            oPrintXlsx:SetValue(nLinha, 2, cProj)
+            oPrintXlsx:SetValue(nLinha, 3, cNumBl)
+            oPrintXlsx:SetValue(nLinha, 4, TRIM(SB1->B1_QUADRA)+' - '+SB1->B1_NOMLOT)
+            oPrintXlsx:SetValue(nLinha, 5, '')
+            oPrintXlsx:SetValue(nLinha, 6, '')
+            nLinha++
+        ENDIF
+        (cAlias)->(dbSkip())
+    EndDo 
+Return
+
+/*/{Protheus.doc} defineUnidades
+    Função para definir o sheet das unidades a serem utilizadas na rotina de geração de Securitizadora/Parceiro
+    @type Static Function
+    @author José Vitor Rodrigues
+    @since 19/08/2025
+    @version 1.0
+/*/ 
+Static Function defineUnidades()
+    Local nLinha  := 1              as numeric
+    Local nAtual  := 1              as numeric
+    local aColunas := {}            as array
+    local cAlias := GetNextAlias()  as character
+
+    oPrintXlsx:AddSheet("Unidades")
+
+    aadd(aColunas,{"COD_UNIDADE"      ,025})
+    aadd(aColunas,{"COD_BLOCO"        ,006})
+    aadd(aColunas,{"UNIDADE"          ,020})
+    aadd(aColunas,{"STATUS_UNIDADE"   ,001})
+    aadd(aColunas,{"ANDAR"            ,010})
+    aadd(aColunas,{"AREA_UTIL"     	  ,010})
+    aadd(aColunas,{"AREA_PRIVATIVO"   ,030})
+    aadd(aColunas,{"AREA_GARAGEM"     ,010})
+    aadd(aColunas,{"AREA_TOTAL"       ,010})
+    aadd(aColunas,{"NUM_VAGAS_GARAGEM",010})
+    aadd(aColunas,{"NUM_QUARTOS"      ,010})
+    aadd(aColunas,{"FRACAO_IDEAL"     ,010})
+    aadd(aColunas,{"VALOR_VENDA"      ,010})
+    aadd(aColunas,{"VALOR_AVALIACAO"  ,010})
+
+    nTamFonte := 8
+    lNegrito  := .F.    
+    cHorAlinha  := oCellHoriz:Center()
+    cVerAlinha  := oCellVerti:Center()
+    oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "FFFFFF", "4D93D9", cCustForma)
+    oPrintXlsx:SetFont(cFonte, nTamFonte, lItalico, lNegrito, lSublinhado)
+
+    For nAtual := 1 To Len(aColunas)
+        oPrintXlsx:SetColumnsWidth(nAtual, nAtual, aColunas[nAtual][2])
+        oPrintXlsx:SetValue(nLinha, nAtual, aColunas[nAtual][1])
+    Next     
+
+    nLinha++    
+
+    //cColuna = SE1.E1_ZZSECUR || SE1.E1_ZZPARCE
+    BEGINSQL Alias cAlias
+        SELECT DISTINCT
+            E1_FILIAL, 
+            E1_PRODUTO, 
+            %exp:cColuna% AS DADO
+        FROM 
+            %table:SE1% SE1
+        WHERE
+            1=1 
+            AND E1_FILIAL IN (%exp:cFiliaisSel%)
+            AND E1_PRODUTO <> ''
+            AND %exp:cColuna% = %exp:cNome%
+            AND SE1.%notdel% 
+        ORDER BY E1_FILIAL, E1_PRODUTO
+    ENDSQL
+
+    DbSelectArea("SB1")
+    DbSetOrder(1)
+
+    While (cAlias)->(!Eof())
+        If nLinha % 2 != 0
+            cCorFundo := "A6C9EC"
+        Else
+            cCorFundo := "DAE9F8"
+        EndIf
+        cHorAlinha := oCellHoriz:Left()
+        oPrintXlsx:ResetCellsFormat()
+        oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+
+        SB1->(MsSeek((cAlias)->E1_FILIAL+(cAlias)->E1_PRODUTO))
+
+        cUnid := SB1->B1_COD
+		cBloco:= SUBSTR(SB1->B1_FILIAL,1,3)+SB1->B1_QUADRA         
+		cNumUn:= SB1->B1_NUMLOT
+		nArea := Round(SB1->(B1_LARG * B1_COMP),2)
+
+        oPrintXlsx:SetValue(nLinha, 1, cUnid)  // Código da Unidade
+        oPrintXlsx:SetValue(nLinha, 2, cBloco) // Código do Bloco
+        oPrintXlsx:SetValue(nLinha, 3, cValtoChar(cNumUn)) // Número da Unidade
+        oPrintXlsx:SetValue(nLinha, 4, '4')    // Status da Unidade
+        oPrintXlsx:SetValue(nLinha, 5, '')    
+        oPrintXlsx:SetValue(nLinha, 6, '')  
+        oPrintXlsx:SetValue(nLinha, 8, '')    
+        oPrintXlsx:SetValue(nLinha, 9, '')    
+        oPrintXlsx:SetValue(nLinha, 10, '')    
+        oPrintXlsx:SetValue(nLinha, 11, '')    
+        oPrintXlsx:SetValue(nLinha, 12, '')    
+        oPrintXlsx:SetValue(nLinha, 13, '')    
+        oPrintXlsx:SetValue(nLinha, 14, '')   
+        oPrintXlsx:SetCellsFormat(cHorAlinhaR, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustomFormat)
+        oPrintXlsx:SetValue(nLinha, 7, nArea)  // Área Privativa
+        nLinha++   
+
+        (cAlias)->(dbSkip())
+    EndDo
+    (cAlias)->(DbCloseArea())
+Return
+
+/*/{Protheus.doc} defineClientes
+    Função para definir o sheet dos clientes a serem utilizadas na rotina de geração de Securitizadora/Parceiro
+    @type  Static Function
+    @author José Vitor Rodrigues
+    @since 20/08/2025
+    @version 1.0
+/*/
+Static Function defineClientes()
+    Local nLinha  := 1              as numeric
+    Local nAtual  := 1            as numeric
+    local aColunas := {}            as array
+    local cAlias := GetNextAlias()  as character
+
+    oPrintXlsx:AddSheet("Clientes")
+
+    aadd(aColunas, {"COD_CLIENTE"        , 008})
+    aadd(aColunas, {"NOME"               , 060})
+    aadd(aColunas, {"PF_PJ"              , 001})
+    aadd(aColunas, {"CPF_CNPJ"           , 015})
+    aadd(aColunas, {"RG"                 , 030})
+    aadd(aColunas, {"ESTADO_CIVIL"       , 010})
+    aadd(aColunas, {"ID_REGIME_CASAMENTO", 010})
+    aadd(aColunas, {"PROFISSAO"          , 030})
+    aadd(aColunas, {"INSCRICAO_MUNICIPAL", 030})
+    aadd(aColunas, {"INSCRICAO_ESTADUAL" , 030})
+    aadd(aColunas, {"SEXO"               , 010})
+    aadd(aColunas, {"TIPO_LOGRADOURO"    , 010})
+    aadd(aColunas, {"ENDERECO"           , 060})
+    aadd(aColunas, {"NUMERO"             , 010})
+    aadd(aColunas, {"COMPLEMENTO"        , 010})
+    aadd(aColunas, {"BAIRRO"             , 030})
+    aadd(aColunas, {"CIDADE"             , 050})
+    aadd(aColunas, {"ESTADO"             , 010})
+    aadd(aColunas, {"CEP"                , 010})
+    aadd(aColunas, {"EMAIL"              , 080})
+    aadd(aColunas, {"DDD_TEL_RESIDENCIAL", 010})
+    aadd(aColunas, {"TEL_RESIDENCIAL"    , 010})
+    aadd(aColunas, {"DDD_TEL_COMERCIAL"  , 010})
+    aadd(aColunas, {"TEL_COMERCIAL"      , 010})
+    aadd(aColunas, {"DDD_TEL_CELULAR"    , 010})
+    aadd(aColunas, {"TEL_CELULAR"        , 010})
+    aadd(aColunas, {"DT_NASCIMENTO"      , 010})
+    aadd(aColunas, {"RENDA_MENSAL"       , 010})
+    aadd(aColunas, {"COD_CONJUGE"        , 008})
+
+    nTamFonte := 8
+    lNegrito  := .F.    
+    cHorAlinha  := oCellHoriz:Center()
+    cVerAlinha  := oCellVerti:Center()
+    oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "FFFFFF", "4D93D9", cCustForma)
+    oPrintXlsx:SetFont(cFonte, nTamFonte, lItalico, lNegrito, lSublinhado)
+
+    For nAtual := 1 To Len(aColunas)
+        oPrintXlsx:SetColumnsWidth(nAtual, nAtual, aColunas[nAtual][2])
+        oPrintXlsx:SetValue(nLinha, nAtual, aColunas[nAtual][1])
+    Next     
+
+    nLinha++
+    
+    
+    //cColuna = E1_ZZSECUR || E1_ZZPARCE
+    BEGINSQL Alias cAlias
+        SELECT DISTINCT
+            E1_FILIAL, 
+            E1_PRODUTO, 
+            %exp:cColuna% as DADO, 
+            E1_CLIENTE, 
+            E1_LOJA
+        FROM 
+            %table:SE1% SE1
+        WHERE
+            1 = 1
+            AND E1_FILIAL IN (%exp:cFiliaisSel%)
+            AND E1_PRODUTO <> ''
+            AND %exp:cColuna% = %exp:cNome%
+            AND SE1.%notdel%
+        ORDER BY E1_FILIAL, E1_CLIENTE, E1_LOJA, E1_PRODUTO
+    ENDSQL
+
+    DbSelectArea("SA1")
+    DbSetOrder(1)
+
+    DbSelectArea("AC8")
+    DbSetOrder(2)
+    
+    DbSelectArea("SU5")
+    DbSetOrder(1)
+    
+    cEntida   := SPACE(TAMSX3('AC8_FILENT')[1])
+    cCli      := ''
+    While (cAlias)->(!Eof())
+        If nLinha % 2 != 0
+            cCorFundo := "A6C9EC"
+        Else
+            cCorFundo := "DAE9F8"
+        EndIf
+
+        IF cCli == (cAlias)->E1_CLIENTE+(cAlias)->E1_LOJA
+		    (cAlias)->(DbSkip())
+            Loop
+        EndIF
+        
+        SA1->(DbSeek(xFilial("SA1")+(cAlias)->E1_CLIENTE+(cAlias)->E1_LOJA))
+          
+        dDtNasc := IF(!Empty(SA1->A1_DTNASC),SA1->A1_DTNASC,'') 
+        
+        // DE/PARA REGIME DE CASAMENTO
+        IF SA1->A1_REGCAS == '1'     // 1=COM.UNIV. BENS ANTES DA LEI  
+            nRegime := '2'
+        ElseIF SA1->A1_REGCAS == '2' // 2=COM. UNIV. BENS DEPOIS DA LEI
+            nRegime := '5'
+        ElseIF SA1->A1_REGCAS == '3' // 3=COM.PARCIAL DE BENS
+            nRegime := '1'
+        ElseIF SA1->A1_REGCAS == '4' // 4=SEPAR.TOTAL DE BENS
+            nRegime := '4'
+        ElseIF SA1->A1_REGCAS == '5' // 5=SEPAR.OBRIG.DE BENS
+            nRegime := '4'
+        Else
+            nRegime := ''
+        EndIF
+        
+        // DE/PARA ESTADO CIVIL
+        IF SA1->A1_ESTCIV == 'S'     // S=Solteiro == 2   
+            cEstCiv := '2'
+        ElseIF SA1->A1_ESTCIV == 'C' // C=Casado == 1
+            cEstCiv := '1'
+        ElseIF SA1->A1_ESTCIV == 'J' // J=Separado Judicialmente == 5
+            cEstCiv := '5'
+        ElseIF SA1->A1_ESTCIV == 'D' // D=Divorciado == 3
+            cEstCiv := '3'
+        ElseIF SA1->A1_ESTCIV == 'V' // V=Viuvo == 4
+            cEstCiv := '4'
+        ElseIF SA1->A1_ESTCIV == ''   
+            cEstCiv := ''
+        EndIF
+        
+        // DE/PARA SEXO
+        IF SA1->A1_SEXO == '1'
+            cSexo := 'M'
+        ElseIF SA1->A1_SEXO == '2'
+            cSexo := 'F'
+        ElseIF SA1->A1_SEXO == ''
+            cSexo := ''         
+        EndIF
+        
+        AC8->(DbSeek(xFilial("AC8")+"SA1"+cEntida+SA1->(A1_COD+A1_LOJA)))        
+        cCodConj := ''
+        While AC8->(!Eof()) .and. AC8->AC8_ENTIDA == "SA1" .and. TRIM(AC8->AC8_CODENT) == SA1->(A1_COD+A1_LOJA)   
+              SU5->(DbSeek(xFilial("SA1")+AC8->AC8_CODCON))
+              IF !Eof() .and. SU5->U5_TIPCONT == "C"
+                 cCodConj := SU5->U5_CODCONT
+                 Exit                   
+              EndIF
+              AC8->(DbSkip())   
+        EndDo
+        cHorAlinha := oCellHoriz:Left()
+        oPrintXlsx:ResetCellsFormat()
+        oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+        
+        oPrintXlsx:SetValue(nLinha, 1 ,SA1->(A1_COD+A1_LOJA))     // 1  - COD_CLIENTE       
+        oPrintXlsx:SetValue(nLinha, 2 ,SA1->A1_NOME)              // 2  - NOME
+        oPrintXlsx:SetValue(nLinha, 3 ,SA1->A1_PESSOA)            // 3  - PF_PJ            
+        oPrintXlsx:SetValue(nLinha, 4 ,SA1->A1_CGC)               // 4  - CPF_CNPJ
+        oPrintXlsx:SetValue(nLinha, 5 ,SA1->A1_PFISICA)           // 5  - RG
+        oPrintXlsx:SetValue(nLinha, 6 ,cEstCiv)                   // 6  - ESTADO_CIVIL
+        oPrintXlsx:SetValue(nLinha, 7 ,nRegime)                   // 7  - ID_REGIME_CASAMENTO
+        oPrintXlsx:SetValue(nLinha, 8 ,SA1->A1_PROFIS)            // 8  - PROFISSAO
+        oPrintXlsx:SetValue(nLinha, 9 ,SA1->A1_INSCRM)            // 9  - INSCRICAO_MUNICIPAL
+        oPrintXlsx:SetValue(nLinha, 10,SA1->A1_INSCR)             // 10 - INSCRICAO_ESTADUAL
+        oPrintXlsx:SetValue(nLinha, 11,cSexo)                     // 11 - SEXO
+        oPrintXlsx:SetValue(nLinha, 12,"")                        // 12 - 
+        oPrintXlsx:SetValue(nLinha, 13,SA1->A1_END)               // 13 - ENDERECO
+        oPrintXlsx:SetValue(nLinha, 14,"")                        // 14 - 
+        oPrintXlsx:SetValue(nLinha, 15,"")                        // 15 - 
+        oPrintXlsx:SetValue(nLinha, 16,SA1->A1_BAIRRO)            // 16 - BAIRRO
+        oPrintXlsx:SetValue(nLinha, 17,SA1->A1_MUN)               // 17 - CIDADE
+        oPrintXlsx:SetValue(nLinha, 18,SA1->A1_EST)               // 18 - ESTADO
+        oPrintXlsx:SetValue(nLinha, 19,SA1->A1_CEP)               // 19 - CEP
+        oPrintXlsx:SetValue(nLinha, 20,SA1->A1_EMAIL)             // 20 - EMAIL
+        oPrintXlsx:SetValue(nLinha, 21,SA1->A1_DDD)               // 21 - DDD_TEL_RESIDENCIAL
+        oPrintXlsx:SetValue(nLinha, 22,SA1->A1_TEL)		         // 22 - TEL_RESIDENCIAL
+        oPrintXlsx:SetValue(nLinha, 23,SA1->A1_DDDCOM)            // 23 - DDD_TEL_COMERCIAL
+        oPrintXlsx:SetValue(nLinha, 24,SA1->A1_TELCOM)            // 24 - TEL_COMERCIAL
+        oPrintXlsx:SetValue(nLinha, 25,SA1->A1_DDDCEL)            // 25 - DDD_TEL_CELULAR
+        oPrintXlsx:SetValue(nLinha, 26,SA1->A1_CELULAR)           // 26 - TEL_CELULAR
+        oPrintXlsx:SetValue(nLinha, 27,dDtNasc)                   // 27 - DT_NASCIMENTO
+        oPrintXlsx:SetValue(nLinha, 28,"")                        // 28 - 
+        oPrintXlsx:SetValue(nLinha, 29,cCodConj)                  // 29 - COD_CONJUGE        
+        nLinha++
+        IF !Empty(cCodConj)
+            If nLinha % 2 != 0
+                cCorFundo := "A6C9EC"
+            Else
+                cCorFundo := "DAE9F8"
+            EndIf
+            oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+            // DE/PARA ESTADO CIVIL
+            IF SU5->U5_CIVIL == '1'     // 1=Solteiro == 2   
+               cEstCiv := '2'
+            ElseIF SU5->U5_CIVIL == '2' // 2=Casado == 1
+               cEstCiv := '1'
+            ElseIF SU5->U5_CIVIL == '5' // 5=Companheiro no Protheus e na ISEC é Separado vou repetir a situação do Principal. São poucos casos com 5 n cadastro.
+               cEstCiv := cEstCiv
+            ElseIF SU5->U5_CIVIL == '3' // 3=Divorciado == 3
+               cEstCiv := '3'
+            ElseIF SU5->U5_CIVIL == '4' // 4=Viuvo == 4
+               cEstCiv := '4'
+            ElseIF SU5->U5_CIVIL == ''   
+               cEstCiv := ''
+            EndIF
+
+            // DE/PARA SEXO
+            IF SU5->U5_SEXO == '1'
+               cSexo := 'M'
+            ElseIF SU5->U5_SEXO == '2'
+               cSexo := 'F'
+            ElseIF SU5->U5_SEXO == ''
+               cSexo := ''         
+            EndIF
+
+        	oPrintXlsx:SetValue(nLinha,  1 , SU5->U5_CODCONT)        // 1  - COD_CLIENTE       
+        	oPrintXlsx:SetValue(nLinha,  2 , SU5->U5_CONTAT)         // 2  - NOME
+        	oPrintXlsx:SetValue(nLinha,  3 , 'F')                    // 3  - PF_PJ            
+        	oPrintXlsx:SetValue(nLinha,  4 , SU5->U5_CPF)            // 4  - CPF_CNPJ
+            oPrintXlsx:SetValue(nLinha,  5 , SU5->U5_RG)             // 5  - RG
+            oPrintXlsx:SetValue(nLinha,  6 , cEstCiv)                // 6  - ESTADO_CIVIL
+        	oPrintXlsx:SetValue(nLinha,  7 , nRegime)                // 7  - ID_REGIME_CASAMENTO
+        	oPrintXlsx:SetValue(nLinha,  8 , SU5->U5_PROFIS)         // 8  - PROFISSAO
+        	oPrintXlsx:SetValue(nLinha,  9 , '')                     // 9  - INSCRICAO_MUNICIPAL
+        	oPrintXlsx:SetValue(nLinha, 10 , '')                     // 10 - INSCRICAO_ESTADUAL
+        	oPrintXlsx:SetValue(nLinha, 11 , cSexo)                  // 11 - SEXO
+        	oPrintXlsx:SetValue(nLinha, 12 , '')                     // 12 - 
+        	oPrintXlsx:SetValue(nLinha, 13 , SU5->U5_END)            // 13 - ENDERECO
+        	oPrintXlsx:SetValue(nLinha, 14 , '')                     // 14 - ENDERECO
+        	oPrintXlsx:SetValue(nLinha, 15 , '')                     // 15 - ENDERECO
+        	oPrintXlsx:SetValue(nLinha, 16 , SU5->U5_BAIRRO)         // 16 - BAIRRO
+        	oPrintXlsx:SetValue(nLinha, 17 , SU5->U5_MUN)            // 17 - CIDADE
+        	oPrintXlsx:SetValue(nLinha, 18 , SU5->U5_EST)            // 18 - ESTADO
+        	oPrintXlsx:SetValue(nLinha, 19 , SU5->U5_CEP)            // 19 - CEP
+        	oPrintXlsx:SetValue(nLinha, 20 , SU5->U5_EMAIL)          // 20 - EMAIL
+        	oPrintXlsx:SetValue(nLinha, 21 , SU5->U5_DDD)            // 21 - DDD_TEL_RESIDENCIAL
+        	oPrintXlsx:SetValue(nLinha, 22 , SU5->U5_FONE)		     // 22 - TEL_RESIDENCIAL
+        	oPrintXlsx:SetValue(nLinha, 23 , SU5->U5_DDDCOM1)        // 23 - DDD_TEL_COMERCIAL
+        	oPrintXlsx:SetValue(nLinha, 24 , SU5->U5_FCOM1)          // 24 - TEL_COMERCIAL
+        	oPrintXlsx:SetValue(nLinha, 25 , SU5->U5_DDDCEL)         // 25 - DDD_TEL_CELULAR
+        	oPrintXlsx:SetValue(nLinha, 26 , SU5->U5_CELULAR)        // 26 - TEL_CELULAR
+        	oPrintXlsx:SetValue(nLinha, 27 , SU5->U5_NIVER)         // 27 - DT_NASCIMENTO
+        	oPrintXlsx:SetValue(nLinha, 28 , '')                     // 28 - DT_NASCIMENTO
+        	oPrintXlsx:SetValue(nLinha, 29 , SA1->(A1_COD+A1_LOJA))  // 29 - COD_CONJUGE                           
+        	nLinha++
+		EndIF							 
+
+	    cCli := (cAlias)->E1_CLIENTE+(cAlias)->E1_LOJA
+
+        (cAlias)->(dbSkip())
+    EndDo
+    (cAlias)->(DbCloseArea())
+Return
+
+/*/{Protheus.doc} defineContratos
+    Função para definir o sheet dos contratos a serem utilizados na rotina de geração de Securitizadora/Parceiro
+    @type  Static Function
+    @author José Vitor Rodrigues
+    @since 20/08/2025
+    @version 1.0
+/*/
+Static Function defineContratos()
+    Local nLinha    := 1               as numeric
+    Local nAtual := 1               as numeric
+    local aColunas  := {}              as array
+    local cAlias    := GetNextAlias()  as character
+    local cAliasE5  := GetNextAlias()  as character
+
+    oPrintXlsx:AddSheet("Contratos")
+
+    aadd(aColunas, {"COD_CONTRATO"         , 020 })
+    aadd(aColunas, {"COD_UNIDADE"          , 020 })
+    aadd(aColunas, {"CPF_CNPJ_CLIENTE"     , 015 })
+    aadd(aColunas, {"ID_STATUS_CONTRATO"   , 002 })
+    aadd(aColunas, {"TIPO_LOGRADOURO"      , 003 })
+    aadd(aColunas, {"ENDERECO"             , 150 })
+    aadd(aColunas, {"NUMERO"               , 006 })
+    aadd(aColunas, {"COMPLEMENTO"          , 010 })
+    aadd(aColunas, {"BAIRRO"               , 040 })
+    aadd(aColunas, {"CIDADE"               , 060 })
+    aadd(aColunas, {"ESTADO"               , 002 })
+    aadd(aColunas, {"CEP"                  , 008 })
+    aadd(aColunas, {"EMAIL"                , 100 })
+    aadd(aColunas, {"DT_ENTREGA_CHAVES"    , 010 })
+    aadd(aColunas, {"DT_CONTRATO"          , 010 })
+    aadd(aColunas, {"DT_CESSAO"            , 010 })
+    aadd(aColunas, {"DT_REPASSE"           , 010 })
+    aadd(aColunas, {"DT_DISTRATO"          , 010 })
+    aadd(aColunas, {"TIPO_DISTRATO"        , 010 })
+    aadd(aColunas, {"COD_CONTRATO_DISTRATO", 010 })
+    aadd(aColunas, {"TIPO_CONTRATO"        , 002 })
+    aadd(aColunas, {"VALOR_COMPRA"         , 010 })
+    aadd(aColunas, {"MATRICULA"            , 010 })
+    aadd(aColunas, {"NOME_CARTORIO"        , 010 })
+    aadd(aColunas, {"OBS"                  , 010 })
+    aadd(aColunas, {"VALOR_FRACAO_IDEAL"   , 010 })
+
+    nTamFonte := 8
+    lNegrito  := .F.    
+    cHorAlinha  := oCellHoriz:Center()
+    cVerAlinha  := oCellVerti:Center()
+    oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "FFFFFF", "4D93D9", cCustForma)
+    oPrintXlsx:SetFont(cFonte, nTamFonte, lItalico, lNegrito, lSublinhado)
+
+    For nAtual := 1 To Len(aColunas)
+        oPrintXlsx:SetColumnsWidth(nAtual, nAtual, aColunas[nAtual][2])
+        oPrintXlsx:SetValue(nLinha, nAtual, aColunas[nAtual][1])
+    Next     
+
+    nLinha++
+    
+    //cColuna = E1_ZZSECUR || E1_ZZPARCE
+    BEGINSQL Alias cAlias
+
+        SELECT DISTINCT 
+            E1_FILIAL, 
+            E1_PRODUTO, 
+            %exp:cColuna% AS DADO, 
+            E1_CLIENTE, 
+            E1_LOJA, 
+            E1_PREFIXO, 
+            E1_NUM, 
+            E1_EMISSAO
+        FROM 
+            %table:SE1% SE1
+        WHERE
+            1 = 1
+            AND E1_FILIAL IN (%exp:cFiliaisSel%)
+            AND E1_PRODUTO <> ''
+            AND E1_PREFIXO <> 'ZZZ'
+            AND %exp:cColuna% = %exp:cNome%
+            AND SE1.%notdel%
+        ORDER BY E1_FILIAL, E1_CLIENTE, E1_LOJA, E1_PRODUTO
+    ENDSQL
+
+    DbSelectArea("SF2")
+    DbSetOrder(1)
+
+    cCliCTR := ''
+	While (cAlias)->(!EOF()) 
+        If nLinha % 2 != 0
+            cCorFundo := "A6C9EC"
+        Else
+            cCorFundo := "DAE9F8"
+        EndIF
+
+        IF cCliCTR == (cAlias)->(E1_FILIAL+E1_CLIENTE+E1_LOJA+E1_NUM)
+		   (cAlias)->(DbSkip())
+           Loop
+        EndIF
+
+        BEGINSQL Alias cAliasE5
+            SELECT E5_FILIAL, E5_PREFIXO, E5_NUMERO, E5_CLIENTE, E5_LOJA, E5_MOTBX, E5_DATA
+            FROM %table:SE5% SE5
+            WHERE 1=1 
+              AND E5_PREFIXO <>'ZZZ' 
+              AND E5_FILIAL  = %exp:(cAlias)->E1_FILIAL%
+              AND E5_PREFIXO = %exp:(cAlias)->E1_PREFIXO%
+              AND E5_NUMERO  = %exp:(cAlias)->E1_NUM%
+              AND E5_CLIFOR  = %exp:(cAlias)->E1_CLIENTE%
+              AND E5_LOJA    = %exp:(cAlias)->E1_LOJA%
+              AND E5_MOTBX IN ('DIS','DAC','ADT', 'DEV', 'RES', 'TRF') 
+              AND SE5.%notdel%
+        ENDSQL
+          
+        IF !(cAliasE5)->(Eof())
+		   cDist := IF(!Empty((cAliasE5)->E5_DATA),Substr((cAliasE5)->E5_DATA,7,2)+'/'+Substr((cAliasE5)->E5_DATA,5,2)+'/'+Substr((cAliasE5)->E5_DATA,1,4),'') 
+		   cStat := '3'
+		Else
+		 	 cDist := ''
+		 	 cStat := '2'		
+		EndIF
+		(cAliasE5)->(DbCloseArea())	
+
+		SA1->(DbSeek(xFilial("SA1")+(cAlias)->E1_CLIENTE+(cAlias)->E1_LOJA))
+		SB1->(DbSeek((cAlias)->E1_FILIAL+(cAlias)->E1_PRODUTO))
+
+		cUnid := SB1->B1_COD
+		cEmis := IF(!Empty((cAlias)->E1_EMISSAO),Substr((cAlias)->E1_EMISSAO,7,2)+'/'+Substr((cAlias)->E1_EMISSAO,5,2)+'/'+Substr((cAlias)->E1_EMISSAO,1,4),'') 
+	
+		SF2->(DbSeek((cAlias)->(E1_FILIAL+E1_NUM+E1_PREFIXO+E1_CLIENTE+E1_LOJA))) 
+        nTotal := IF(SF2->(!Eof()),SF2->F2_VALBRUT,0)
+
+        cHorAlinha := oCellHoriz:Left()
+        oPrintXlsx:ResetCellsFormat()
+        oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+        
+        oPrintXlsx:SetValue(nLinha, 1  , (cAlias)->(SUBSTR(E1_FILIAL,1,3)+'-'+TRIM(E1_NUM)+'-'+E1_CLIENTE+E1_LOJA))      // 1 - COD_CONTRATO
+        oPrintXlsx:SetValue(nLinha, 2  , cUnid)                                                                          // 2 - COD_UNIDADE
+        oPrintXlsx:SetValue(nLinha, 3  , SA1->A1_CGC)                                                                    // 3 - CPF_CNPJ_CLIENTE    
+        oPrintXlsx:SetValue(nLinha, 4  , cStat)                                                                          // 4 - ID_STATUS_CONTRATO
+        oPrintXlsx:SetValue(nLinha, 5  , '')                                                                             // 5 - TIPO_LOGRADOURO
+        oPrintXlsx:SetValue(nLinha, 6  , SA1->A1_END)                                                                    // 6 - ENDERECO
+        oPrintXlsx:SetValue(nLinha, 7  , '')                                                                             // 7 - NUMERO
+        oPrintXlsx:SetValue(nLinha, 8  , '')                                                                             // 8 - COMPLEMENTO
+        oPrintXlsx:SetValue(nLinha, 9  , SA1->A1_BAIRRO)                                                                 // 9 - BAIRRO
+        oPrintXlsx:SetValue(nLinha, 10 , SA1->A1_MUN)                                                                    // 10 - CIDADE
+        oPrintXlsx:SetValue(nLinha, 11 , SA1->A1_EST)                                                                    // 11 - ESTADO
+        oPrintXlsx:SetValue(nLinha, 12 , SA1->A1_CEP)                                                                    // 12 - CEP
+        oPrintXlsx:SetValue(nLinha, 13 , SA1->A1_EMAIL)                                                                  // 13 - EMAIL
+        oPrintXlsx:SetValue(nLinha, 14 , '')                                                                             // 14 - DT_ENTREGA_CHAVES
+        oPrintXlsx:SetValue(nLinha, 15 , cEmis)                                                                          // 15 - DT_CONTRATO
+        oPrintXlsx:SetValue(nLinha, 16 , '')                                                                             // 16 - DT_CESSAO
+        oPrintXlsx:SetValue(nLinha, 17 , '')                                                                             // 17 - DT_REPASSE
+        oPrintXlsx:SetValue(nLinha, 18 , cDist)                                                                          // 18 - DT_DISTRATO
+        oPrintXlsx:SetValue(nLinha, 19 , '')                                                                             // 19 - TIPO_DISTRATO
+        oPrintXlsx:SetValue(nLinha, 20 , '')                                                                             // 20 - COD_CONTRATO_DISTRATO
+        oPrintXlsx:SetValue(nLinha, 21 , '2')                                                                            // 21 - TIPO_CONTRATO
+        oPrintXlsx:SetCellsFormat(cHorAlinhaR, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustomFormat)
+        oPrintXlsx:SetValue(nLinha, 22 , nTotal)                                                                         // 22 - VALOR_COMPRA
+        oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+        oPrintXlsx:SetValue(nLinha, 23 , '')                                                                             // 23 - MATRICULA
+        oPrintXlsx:SetValue(nLinha, 24 , '')                                                                             // 24 - NOME_CARTORIO
+        oPrintXlsx:SetValue(nLinha, 25 , '')                                                                             // 25 - OBS
+        oPrintXlsx:SetValue(nLinha, 26 , '')                                                                             // 26 - VALOR_FRACAO_IDEAL
+
+        nLinha++
+
+        cCliCTR := (cAlias)->(E1_FILIAL+E1_CLIENTE+E1_LOJA+E1_NUM)
+
+        (cAlias)->(DbSkip())
+	EndDo
+    (cAlias)->(DbCloseArea())
+Return
+
+/*/{Protheus.doc} defineParticipacoes
+    Função para definir o sheet das participações a serem utilizadas na rotina de geração de Securitizadora/Parceiro
+    @type  Static Function
+    @author José Vitor Rodrigues
+    @since 20/08/2025
+    @version 1.0
+/*/
+Static Function defineParticipacoes()
+    Local nLinha    := 1               as numeric
+    Local nAtual := 1               as numeric
+    local aColunas  := {}              as array
+    local cAlias    := GetNextAlias()  as character
+
+    oPrintXlsx:AddSheet("Participações")
+
+    aadd(aColunas, {"COD_CONTRATO"      , 020 })
+    aadd(aColunas, {"CPF_CNPJ_CLIENTE"  , 015 })
+    aadd(aColunas, {"ID_RELACAO_TITULAR", 002 })
+    aadd(aColunas, {"PERC_PARTICIPACAO" , 006 })
+    aadd(aColunas, {"PERC_SEGURO"       , 010 })
+
+    nTamFonte := 8
+    lNegrito  := .F.
+    cHorAlinha  := oCellHoriz:Center()
+    cVerAlinha  := oCellVerti:Center()
+    oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "FFFFFF", "4D93D9", cCustForma)
+    oPrintXlsx:SetFont(cFonte, nTamFonte, lItalico, lNegrito, lSublinhado)
+    For nAtual := 1 To Len(aColunas)
+        oPrintXlsx:SetColumnsWidth(nAtual, nAtual, aColunas[nAtual][2])
+        oPrintXlsx:SetValue(nLinha, nAtual, aColunas[nAtual][1])
+    Next
+    nLinha++
+    
+    //cColuna = E1_ZZSECUR || E1_ZZPARCE
+    BEGINSQL Alias cAlias
+        SELECT 
+            E1_FILIAL, 
+            E1_PRODUTO, 
+            %exp:cColuna% AS DADO, 
+            E1_CLIENTE, 
+            E1_LOJA, 
+            E1_PREFIXO, 
+            E1_NUM
+        FROM 
+            %table:SE1% SE1
+        WHERE 
+            1 = 1
+            AND E1_FILIAL IN (%exp:cFiliaisSel%)
+            AND E1_PRODUTO <> ''
+            AND %exp:cColuna% = %exp:cNome%
+            AND SE1.%notdel%
+    ENDSQL
+
+    cCliCTR := ''
+
+	While (cAlias)->(!EOF()) 
+        If nLinha % 2 != 0
+            cCorFundo := "A6C9EC"
+        Else
+            cCorFundo := "DAE9F8"
+        EndIf
+
+        IF cCliCTR == (cAlias)->(E1_FILIAL+E1_CLIENTE+E1_LOJA+E1_NUM)
+		   (cAlias)->(DbSkip())
+           Loop
+        EndIF
+
+        oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+
+        SA1->(DbSeek(xFilial("SA1")+(cAlias)->E1_CLIENTE+(cAlias)->E1_LOJA))
+        oPrintXlsx:SetValue(nLinha, 1 ,(cAlias)->(SUBSTR(E1_FILIAL,1,3)+'-'+TRIM(E1_NUM)+'-'+E1_CLIENTE+E1_LOJA))
+        oPrintXlsx:SetValue(nLinha, 2 ,SA1->A1_CGC)
+        oPrintXlsx:SetValue(nLinha, 3 ,'1')            
+        oPrintXlsx:SetValue(nLinha, 4 ,'')
+        oPrintXlsx:SetValue(nLinha, 5 ,'')
+        nLinha++
+
+        cCliCTR := (cAlias)->(E1_FILIAL+E1_CLIENTE+E1_LOJA+E1_NUM)
+
+        (cAlias)->(DbSkip())
+	EndDo    
+    (cAlias)->(DbCloseArea())
+Return
+
+Static Function defineParcelas()
+    Local nLinha    := 1               as numeric
+    Local nAtual := 1               as numeric
+    local aColunas  := {}              as array
+    local cAlias    := GetNextAlias()  as character
+    local cAliasE5  := GetNextAlias()  as character
+
+    oPrintXlsx:AddSheet("Parcelas")
+
+    aadd(aColunas, {"COD_PARCELA"        , 010})  // 1
+    aadd(aColunas, {"COD_CONTRATO"       , 020})  // 2
+    aadd(aColunas, {"PARCELA"            , 010})  // 3
+    aadd(aColunas, {"ID_TIPO_PARCELA"    , 003})  // 4
+    aadd(aColunas, {"HISTORICO"          , 010})  // 5
+    aadd(aColunas, {"DT_BASE_INDICE"     , 010})  // 6
+    aadd(aColunas, {"DT_VENCTO"          , 010})  // 7
+    aadd(aColunas, {"VALOR_PRINCIPAL"    , 010})  // 8
+    aadd(aColunas, {"VALOR_ORIGINAL"     , 010})  // 9
+    aadd(aColunas, {"VALOR_CORRIGIDO"    , 010})  // 10
+    aadd(aColunas, {"VALOR_PAGO"         , 010})  // 11
+    aadd(aColunas, {"DT_PAGTO_BOLETO"    , 010})  // 12
+    aadd(aColunas, {"DT_CREDITO"         , 010})  // 13
+    aadd(aColunas, {"INDICE1"            , 002})  // 14
+    aadd(aColunas, {"INDICE2"            , 010})  // 15
+    aadd(aColunas, {"DT_BASE_JUROS"      , 010})  // 16
+    aadd(aColunas, {"DT_INI_INDICE2"     , 010})  // 17
+    aadd(aColunas, {"DEFASAGEM"          , 002})  // 18
+    aadd(aColunas, {"VALOR_MULTA"        , 010})  // 19
+    aadd(aColunas, {"JUROS_MORA"         , 010})  // 20
+    aadd(aColunas, {"DESCONTO"           , 010})  // 21
+    aadd(aColunas, {"RESIDUO"            , 010})  // 22
+    aadd(aColunas, {"SEGURO_PRESTAMISTA" , 010})  // 23
+    aadd(aColunas, {"TX_ENVIO_BOLETO"    , 010})  // 24
+    aadd(aColunas, {"TX_JUROS_AA"        , 008})  // 25
+    aadd(aColunas, {"SISTEMA_AMORTIZACAO", 010})  // 26
+    aadd(aColunas, {"NUM_RENEG"          , 010})  // 27
+    aadd(aColunas, {"TIPO_RENEG"         , 010})  // 28
+    aadd(aColunas, {"DT_RENEG"           , 010})  // 29
+
+    nTamFonte := 8
+    lNegrito  := .F.
+    cHorAlinha  := oCellHoriz:Center()
+    cVerAlinha  := oCellVerti:Center()
+    oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "FFFFFF", "4D93D9", cCustForma)
+    oPrintXlsx:SetFont(cFonte, nTamFonte, lItalico, lNegrito, lSublinhado)
+
+    For nAtual := 1 To Len(aColunas)
+        oPrintXlsx:SetColumnsWidth(nAtual, nAtual, aColunas[nAtual][2])
+        oPrintXlsx:SetValue(nLinha, nAtual, aColunas[nAtual][1])
+    Next     
+
+    nLinha++
+    
+    
+
+    //cColuna = E1_ZZSECUR || E1_ZZPARCE
+    BEGINSQL Alias cAlias
+        SELECT 
+            E1_FILIAL, 
+            E1_PRODUTO, 
+            E1_ZZSECUR, 
+            E1_CLIENTE, 
+            E1_LOJA, 
+            E1_PREFIXO, 
+            E1_NUM, 
+            E1_EMISSAO, 
+            E1_DTIGPM, 
+            E1_ZZINDIC, 
+            E1_PARCELA, 
+            E1_VENCREA, 
+            E1_VALOR, 
+            E1_VALLIQ, 
+            E1_MULTA, 
+            E1_JUROS, 
+            E1_DESCONT, 
+            E1_ACRESC, 
+            E1_BAIXA, 
+            E1_TIPO             
+        FROM 
+            %table:se1% SE1
+        WHERE 
+            1 = 1
+            AND E1_FILIAL IN (%exp:cFiliaisSel%)
+            AND E1_PRODUTO <> ''
+            AND %exp:cColuna% = %exp:cNome%
+            AND SE1.%notdel%
+        ORDER BY E1_FILIAL, E1_CLIENTE, E1_LOJA, E1_NUM, E1_PARCELA
+    ENDSQL
+    cCdCTR := ''
+    While (cAlias)->(!EOF()) 
+        If nLinha % 2 != 0
+            cCorFundo := "A6C9EC"
+        Else
+            cCorFundo := "DAE9F8"
+        EndIf
+
+        //Tabela ZZA DE/PARA: 1=IPCA==>7 || 2=IGPM==>2 || 3=INCC==>1 || 6=FIXO ==> 11 //
+        IF (cAlias)->E1_ZZINDIC == '1'     // IPCA 
+		   cIndi := '7'
+		ElseIF (cAlias)->E1_ZZINDIC == '2' // IGPM
+		   cIndi := '2'
+		ElseIF (cAlias)->E1_ZZINDIC == '3' // INCC
+		   cIndi := '1'
+		ElseIF (cAlias)->E1_ZZINDIC == '6' .or. (cAlias)->E1_ZZINDIC == '' // FIXO 
+		   cIndi := '11'	   
+		EndIF
+
+		cEmis := IF(!Empty((cAlias)->E1_EMISSAO),Substr((cAlias)->E1_EMISSAO,7,2)+'/'+Substr((cAlias)->E1_EMISSAO,5,2)+'/'+Substr((cAlias)->E1_EMISSAO,1,4),'') 
+		cVcto := IF(!Empty((cAlias)->E1_VENCREA),Substr((cAlias)->E1_VENCREA,7,2)+'/'+Substr((cAlias)->E1_VENCREA,5,2)+'/'+Substr((cAlias)->E1_VENCREA,1,4),'')
+		cBaix := IF(!Empty((cAlias)->E1_BAIXA),Substr((cAlias)->E1_BAIXA,7,2)+'/'+Substr((cAlias)->E1_BAIXA,5,2)+'/'+Substr((cAlias)->E1_BAIXA,1,4),'')
+		//cIGPM := IF(!Empty((cAlias)->E1_DTIGPM),'01/'+Substr((cAlias)->E1_DTIGPM,5,2)+'/'+Substr((cAlias)->E1_DTIGPM,1,4),'')
+
+		IF cCdCTR <> (cAlias)->(SUBSTR(E1_FILIAL,1,3)+'-'+TRIM(E1_NUM)+'-'+E1_CLIENTE+E1_LOJA)
+           cCdCTR:= (cAlias)->(SUBSTR(E1_FILIAL,1,3)+'-'+TRIM(E1_NUM)+'-'+E1_CLIENTE+E1_LOJA)
+		   cIGPM := IF(!Empty((cAlias)->E1_DTIGPM),'01/'+Substr((cAlias)->E1_DTIGPM,5,2)+'/'+Substr((cAlias)->E1_DTIGPM,1,4),'')
+        EndIF
+
+		cID_Tp:= IF(Substr((cAlias)->E1_PARCELA,1,1)=='E','1',IF(Substr((cAlias)->E1_PARCELA,1,1)=='Z','','2'))
+		cIndi := IF(cID_Tp == '1','11',cIndi)
+		xIGPM := IF(cIndi=='11','',cIGPM)
+		nDefa := IF(cIndi=='11' .or. Empty((cAlias)->E1_DTIGPM),0,2)
+        nJuros:= IF(cBaix>cVcto,(cAlias)->E1_JUROS,0)
+
+        cHorAlinha := oCellHoriz:Left()
+        oPrintXlsx:ResetCellsFormat()
+        oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+
+        BEGINSQL Alias cAliasE5
+            SELECT 
+                E5_MOTBX,
+                E5_TIPODOC,
+                E5_DTDISPO,
+                E5_VLJUROS,
+                E5_VLACRES,
+                E5_VALOR
+            FROM 
+                %table:SE5% SE5
+            WHERE 
+                1=1 
+                AND E5_FILIAL  = %exp:(cAlias)->E1_FILIAL%
+                AND E5_PREFIXO = %exp:(cAlias)->E1_PREFIXO%
+                AND E5_NUMERO  = %exp:(cAlias)->E1_NUM%
+                AND E5_PARCELA = %exp:(cAlias)->E1_PARCELA%
+                AND E5_TIPO    = %exp:(cAlias)->E1_TIPO%
+                AND E5_CLIFOR  = %exp:(cAlias)->E1_CLIENTE%
+                AND E5_LOJA    = %exp:(cAlias)->E1_LOJA%
+                AND SE5.%notdel%
+            ORDER BY E5_FILIAL, E5_DATA 
+        EndSQL
+
+
+          IF (cAliasE5)->(!Eof())
+             // SOMA DOS TÍTULOS IDÊNTICOS, CASO TENHA PAGAMENTOS PARCIAIS
+             lPass := 1 
+          	 While (cAliasE5)->(!Eof())  
+                IF (cAliasE5)->E5_MOTBX$'ADT|BPO|DAC|DEV|DIS|PRM|RES|TRF'
+                   (cAliasE5)->(DbSkip())
+                   Loop
+                EndIF
+             	IF (cAliasE5)->E5_TIPODOC == "VL" .OR. (cAliasE5)->E5_TIPODOC == "BA"
+		            dDtDisp := IF(!Empty((cAliasE5)->E5_DTDISPO),Substr((cAliasE5)->E5_DTDISPO,7,2)+'/'+Substr((cAliasE5)->E5_DTDISPO,5,2)+'/'+Substr((cAliasE5)->E5_DTDISPO,1,4),'')
+                    nJuros  := (cAliasE5)->E5_VLJUROS - E5_VLACRES
+                    oPrintXlsx:SetValue(nLinha, 1 ,(cAlias)->(E1_FILIAL+'-'+TRIM(E1_PARCELA)))           // 1 - COD_PARCELA
+                    oPrintXlsx:SetValue(nLinha, 2 ,cCdCTR)                                               // 2 - COD_CONTRATO                       
+                    oPrintXlsx:SetValue(nLinha, 3 ,'')                                                   // 3 - PARCELA
+                    oPrintXlsx:SetValue(nLinha, 4 ,cID_Tp)                                               // 4 - ID_TIPO_PARCELA    
+                    oPrintXlsx:SetValue(nLinha, 5 ,'')                                                   // 5 - HISTORICO
+                    oPrintXlsx:SetValue(nLinha, 6 ,xIGPM)                                                // 6 - DT_BASE_INDICE
+                    oPrintXlsx:SetValue(nLinha, 7 ,cVcto)                                                // 7 - DT_VENCTO
+                    oPrintXlsx:SetCellsFormat(cHorAlinhaR, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustomFormat)
+                    IF lPass == 1
+                      oPrintXlsx:SetValue(nLinha, 8 ,(cAlias)->E1_VALOR)                                // 8 - VALOR_PRINCIPAL
+                      oPrintXlsx:SetValue(nLinha, 9 ,(cAlias)->E1_VALOR)                                // 9 - VALOR_ORIGINAL
+                    Else
+                      oPrintXlsx:SetValue(nLinha, 8 ,0)                                                 // 8 - VALOR_PRINCIPAL
+                      oPrintXlsx:SetValue(nLinha, 9 ,0)                                                 // 9 - VALOR_ORIGINAL
+                    EndIF
+                    oPrintXlsx:SetValue(nLinha, 10 ,(cAlias)->E1_VALOR+(cAlias)->E1_ACRESC)               //10 - VALOR_CORRIGIDO
+                    oPrintXlsx:SetValue(nLinha, 11 ,(cAliasE5)->E5_VALOR)                                // 11 - VALOR_PAGO
+                    oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+                    oPrintXlsx:SetValue(nLinha, 12 ,'')                                                  // 12 - DT_PAGTO_BOLETO
+                    oPrintXlsx:SetValue(nLinha, 13 ,dDtDisp)                                                  // 13 - DT_CREDITO
+                    oPrintXlsx:SetValue(nLinha, 14 ,cIndi)                                             // 14 - INDICE1
+                    oPrintXlsx:SetValue(nLinha, 15 ,'')                                               // 15 - INDICE2
+                    oPrintXlsx:SetValue(nLinha, 16 ,xIGPM)                                                  // 16 - DT_BASE_JUROS
+                    oPrintXlsx:SetValue(nLinha, 17 ,'')                                               // 17 - DT_INI_INDICE2
+                    oPrintXlsx:SetCellsFormat(cHorAlinhaR, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustomFormat)
+                    oPrintXlsx:SetValue(nLinha, 18 ,nDefa)                                               // 18 - DEFASAGEM
+                    oPrintXlsx:SetValue(nLinha, 19 ,(cAlias)->E1_MULTA)                                  // 19 - VALOR_MULTA
+                    oPrintXlsx:SetValue(nLinha, 20 ,nJuros)                                              // 20 - JUROS_MORA
+                    oPrintXlsx:SetValue(nLinha, 21 ,(cAlias)->E1_DESCONT)                                // 21 - DESCONTO
+                    oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+                    oPrintXlsx:SetValue(nLinha, 22 ,'')                                                  // 22 - RESIDUO
+                    oPrintXlsx:SetValue(nLinha, 23 ,'')                                                  // 23 - SEGURO_PRESTAMISTA
+                    oPrintXlsx:SetValue(nLinha, 24 ,'')                                                  // 24 - TX_ENVIO_BOLETO
+                    oPrintXlsx:SetCellsFormat(cHorAlinhaR, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustomFormat)
+                    oPrintXlsx:SetValue(nLinha, 25 ,0)                                                   // 25 - TX_JUROS_AA 
+                    oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+                    oPrintXlsx:SetValue(nLinha, 26 ,'')                                                  // 26 - SISTEMA_AMORTIZACAO
+                    oPrintXlsx:SetValue(nLinha, 27 ,'')                                                  // 27 - NUM_RENEG
+                    oPrintXlsx:SetValue(nLinha, 28 ,'')                                                  // 28 - TIPO_RENEG
+                    oPrintXlsx:SetValue(nLinha, 29 ,'')                                                  // 29 - DT_RENEG                   
+                    
+                   nLinha++
+                   lPass := lPass + 1
+                EndIF
+                (cAliasE5)->(DbSkip())
+             EndDo
+
+          Else
+
+             // TÍTULOS SEM PAGAMENTO         
+            oPrintXlsx:SetValue(nLinha, 1 ,(cAlias)->(E1_FILIAL+'-'+TRIM(E1_PARCELA)))           // 1 - COD_PARCELA
+            oPrintXlsx:SetValue(nLinha, 2 ,cCdCTR)                                               // 2 - COD_CONTRATO
+            oPrintXlsx:SetValue(nLinha, 3 ,'')                                                   // 3 - PARCELA
+            oPrintXlsx:SetValue(nLinha, 4 ,cID_Tp)                                               // 4 - ID_TIPO_PARCELA
+            oPrintXlsx:SetValue(nLinha, 5 ,'' )                                                  // 5 - HISTORICO
+            oPrintXlsx:SetValue(nLinha, 6 ,xIGPM)                                                // 6 - DT_BASE_INDICE
+            oPrintXlsx:SetValue(nLinha, 7 ,cVcto)                                                // 7 - DT_VENCTO
+            oPrintXlsx:SetCellsFormat(cHorAlinhaR, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustomFormat)
+            oPrintXlsx:SetValue(nLinha, 8 ,(cAlias)->E1_VALOR)                                   // 8 - VALOR_PRINCIPAL
+            oPrintXlsx:SetValue(nLinha, 9 ,(cAlias)->E1_VALOR)                                   // 9 - VALOR_ORIGINAL
+            oPrintXlsx:SetValue(nLinha, 10 ,(cAlias)->E1_VALOR+(cAlias)->E1_ACRESC)              // 10 - VALOR_CORRIGIDO
+            oPrintXlsx:SetValue(nLinha, 11 ,(cAlias)->E1_VALLIQ)                                 // 11 - VALOR_PAGO
+            oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+            oPrintXlsx:SetValue(nLinha, 12 ,'')                                                  // 12 - DT_PAGTO_BOLETO
+            oPrintXlsx:SetValue(nLinha, 13 ,cBaix)                                               // 13 - DT_CREDITO
+            oPrintXlsx:SetValue(nLinha, 14 ,cIndi)                                               // 14 - INDICE1
+            oPrintXlsx:SetValue(nLinha, 15 ,'')                                                  // 15 - INDICE2
+            oPrintXlsx:SetValue(nLinha, 16 ,xIGPM)                                               // 16 - DT_BASE_JUROS
+            oPrintXlsx:SetValue(nLinha, 17 ,'')                                                  // 17 - DT_INI_INDICE2
+            oPrintXlsx:SetCellsFormat(cHorAlinhaR, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustomFormat)
+            oPrintXlsx:SetValue(nLinha, 18 ,nDefa)                                               // 18 - DEFASAGEM
+            oPrintXlsx:SetValue(nLinha, 19 ,(cAlias)->E1_MULTA)                                  // 19 - VALOR_MULTA
+            oPrintXlsx:SetValue(nLinha, 20 ,nJuros)                                              // 20 - JUROS_MORA            
+            oPrintXlsx:SetValue(nLinha, 21 ,(cAlias)->E1_DESCONT)                                // 21 - DESCONTO
+            oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+            oPrintXlsx:SetValue(nLinha, 22 ,'')                                                  // 22 - RESIDUO
+            oPrintXlsx:SetValue(nLinha, 23 ,'')                                                  // 23 - SEGURO_PRESTAMISTA
+            oPrintXlsx:SetValue(nLinha, 24 ,'')                                                  // 24 - TX_ENVIO_BOLETO
+            oPrintXlsx:SetCellsFormat(cHorAlinhaR, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustomFormat)
+            oPrintXlsx:SetValue(nLinha, 25 ,0)                                                   // 25 - TX_JUROS_AA
+            oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+            oPrintXlsx:SetValue(nLinha, 26 ,'')                                                  // 26 - SISTEMA_AMORTIZACAO
+            oPrintXlsx:SetValue(nLinha, 27 ,'')                                                  // 27 - NUM_RENEG
+            oPrintXlsx:SetValue(nLinha, 28 ,'')                                                  // 28 - TIPO_RENEG
+            oPrintXlsx:SetValue(nLinha, 29 ,'')                                                  // 29 - DT_RENEG
+
+             nLinha++
+          EndIF
+
+          (cAlias)->(DbSkip())
+          (cAliasE5)->(DbCloseArea())
+          
+	EndDo    
+    (cAlias)->(DbCloseArea())
+
+Return
+
+/*/{Protheus.doc} defineOcorrencias
+    Função para definir o sheet das ocorrências a serem utilizadas na rotina de geração de Securitizadora/Parceiro
+    @type  Static Function
+    @author José Vitor Rodrigues
+    @since 20/08/2025
+    @version 1.0
+/*/
+Static function defineOcorrencias()
+    Local nLinha    := 1               as numeric
+    Local nAtual := 1               as numeric
+    Local aColunas  := {}              as array
+    
+    oPrintXlsx:AddSheet("Ocorrências")
+
+    aadd(aColunas, {"COD_OCORRENCIA" , 010})
+    aadd(aColunas, {"COD_CONTRATO"   , 010})
+    aadd(aColunas, {"DT_REGISTRO"    , 010})
+    aadd(aColunas, {"ID_ORIGEM"      , 010})
+    aadd(aColunas, {"ID_TIPO"        , 010})
+    aadd(aColunas, {"ID_MOTIVO"      , 010})
+    aadd(aColunas, {"ID_DEPARTAMENTO", 010})
+    aadd(aColunas, {"D_SOLICITACAO"  , 010})
+    aadd(aColunas, {"DT_CONCLUSAO"   , 010})
+    aadd(aColunas, {"DESCRICAO"      , 010})
+
+    nTamFonte := 8
+    lNegrito  := .F.
+    cHorAlinha  := oCellHoriz:Center()
+    cVerAlinha  := oCellVerti:Center()
+    oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "FFFFFF", "4D93D9", cCustForma)
+    oPrintXlsx:SetFont(cFonte, nTamFonte, lItalico, lNegrito, lSublinhado)
+
+    For nAtual := 1 To Len(aColunas)
+        oPrintXlsx:SetColumnsWidth(nAtual, nAtual, aColunas[nAtual][2])
+        oPrintXlsx:SetValue(nLinha, nAtual, aColunas[nAtual][1])
+    Next     
+
+    nLinha++  
+
+    cCorFundo := "A6C9EC"
+    cHorAlinha := oCellHoriz:Left()
+    oPrintXlsx:ResetCellsFormat()
+    oPrintXlsx:SetCellsFormat(cHorAlinha, cVerAlinha, lQuebrLin, nRotation, "000000", cCorFundo, cCustForma)
+        
+    For nAtual := 1 To Len(aColunas)
+        oPrintXlsx:SetValue(nLinha, nAtual, '')
+    Next 
+Return
+
+/*/{Protheus.doc} defineFiliais
+    Função para definir as filiais a serem utilizadas na rotina de geração de Securitizadora/Parceiro
+    Esta função é chamada para popular a tabela temporária com as filiais de Securitizadora ou Parceiro
+    dependendo do tipo selecionado pelo usuário.
+    @type Static Function
+    @author josé Vitor Rodrigues
+    @since 19/08/2025
+    @version 1.0
+/*/
+Static Function defineFiliais()
+    local cMarca := oMaBrowse:Mark() as character
+    local nQuant := 0 as numeric
+    dbSelectArea(cAlTmp)
+    (cAlTmp)->(DBGoTop())
+
+    if !(cAlTmp)->(EOF())
+        cFiliaisSel := '%'
+        While (cAlTmp)->(!EOF())
+            if oMaBrowse:IsMark(cMarca)
+                aadd(aSelFil, {(cAlTmp)->FILIAL, (cAlTmp)->NOME, (cAlTmp)->CNPJ})
+                if nQuant == 0
+                    cFiliaisSel += "'" + (cAlTmp)->FILIAL + "'"
+                else
+                    cFiliaisSel += ",'" + (cAlTmp)->FILIAL + "'"
+                endif
+                nQuant++
+            ENDIF
+            (cAlTmp)->(DBSkip())
+        EndDo
+        cFiliaisSel += '%'
+    ENDIF
+
+    if nQuant == 0
+        FWMsgInfo("Nenhuma filial foi selecionada. A rotina será encerrada.")
+        return
+    endif
+
+Return 
+
+/*/{Protheus.doc} Popula
+    Função para popular a tabela temporária com as filiais de Securitizadora/Parceiro
+    @type Static Function
+    @author José Vitor Rodrigues
+    @since 19/08/2025
+    @version 1.0
+/*/
+Static Function Popula()
+    Local cAlias    := getNextAlias() as character  
+    
+    cColuna := IF(nTipo == 1, "%SE1.E1_ZZSECUR%", "%SE1.E1_ZZPARCE%")
+
+    BEGINSQL ALIAS cAlias
+        SELECT 
+            SM0.M0_CODIGO    AS CODIGO,
+            SM0.M0_CODFIL    AS FILIAL,
+            SM0.M0_NOMECOM   AS NOME,
+            SM0.M0_CGC       AS CNPJ
+        FROM 
+            SYS_COMPANY SM0
+        WHERE 
+            SM0.M0_CODFIL IN (SELECT DISTINCT
+                                E1_FILIAL 
+                              FROM 
+                                %table:se1% SE1 
+                              WHERE 
+                                1 = 1
+                                AND SE1.%notdel%
+                                AND %exp:cColuna% = %exp:cNome%
+                             )                            
+            AND SM0.M0_CODIGO = '02'
+            AND SM0.%notdel%
+    ENDSQL
+
+    While (cAlias)->(!EOF())
+        If Reclock(cAlTmp, .T.)
+            (cAlTmp)->OK := Space(2)
+            (cAlTmp)->CODIGO    := (cAlias)->CODIGO
+            (cAlTmp)->FILIAL    := (cAlias)->FILIAL
+            (cAlTmp)->NOME      := (cAlias)->NOME
+            (cAlTmp)->CNPJ      := (cAlias)->CNPJ
+            (cAlTmp)->(MsUnlock())
+        EndIf
+        (cAlias)->(dbSkip())
+    EndDO
+
+Return 
+
+/*/{Protheus.doc} PerguntasRotina
+    Função para coletar os parâmetros necessários para a rotina de geração de Securitizadora/Parceiro
+    @type user function
+    @author José Vitor Rodrigues
+    @since 19/08/2025
+    @version 1.0
+/*/
+Static Function PerguntasRotina()
+    Local aPergs := {}
+
+    aadd(aPergs, {2, "Origem", "1", {"1=Securitizadora", "2=Parceiro"}, 80  , ".T.", .T.})
+    aadd(aPergs, {1, "Nome Sec/Parc"           , Space(6)    , "", "", ""   , ".T.", 80, .T.})
+
+    IF ParamBox(aPergs, "Informe os parâmetros")
+        nTipo := Val(MV_PAR01)
+        cNome := ALLTRIM(UPPER(MV_PAR02))
+        if !(U_VERNOM())
+            PerguntasRotina()
+        EndIf
+    EndIF
+
+Return
+
